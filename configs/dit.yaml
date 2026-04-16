@@ -1,0 +1,27 @@
+defaults:
+  - _self_
+  - model: dit
+  - data: multi_latent_pretrain_nomix
+  - trainer: dit_all_gpu
+  # - trainer: dit
+  
+
+wandb_project: "MGE-LDM-DIT"
+
+
+seed: 42
+ckpt_path: null
+save_dir: null
+
+## Pre-trained AutoEncoder path
+## Should be unwrapped checkpoint
+# autoencoder_ckpt_path: "/data2/yoongi/MGE_LDM/default_ae/checkpoints/unwrapped_last.ckpt"
+autoencoder_ckpt_path: null ## Should be specified
+
+
+batch_size: 64
+num_workers: 32
+
+mixture_only_pretraining: false
+pretrained_ckpt_path: null ## mixture-only pretrained model path
+# pretrained_ckpt_path: "/data2/yoongi/MGE_LDM/default_dit_mix_pretrain/checkpoints/unwrapped_last.ckpt"
