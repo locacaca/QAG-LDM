@@ -142,7 +142,47 @@ pre_extracted_latents/
 ├── moisesdb/...
 ```
 
-### 4. Train Latent Diffusion Model
+### 4. Compute COCOLA Scores
+
+After pre-encoding, compute COCOLA coherence scores for each (sub-mixture, source) pair and write them into the corresponding `comb_info.json` files. This step requires the frozen [COCOLA-HP-v1](https://github.com/gladia-research-group/cocola) checkpoint.
+
+For each combination directory, load the sub-mixture and source audio, compute the COCOLA similarity score, and add the `cocola_score` field to `comb_info.json`:
+
+```python
+import json
+import torch
+from cocola import COCOLAModel  # from the COCOLA repository
+
+model = COCOLAModel.from_pretrained("cocola-hp-v1")
+model.eval()
+
+# For each comb_info.json in pre_extracted_latents/
+score = model.compute_score(submix_audio, src_audio)
+
+with open("path/to/comb_info.json", "r") as f:
+    info = json.load(f)
+info["cocola_score"] = float(score)
+with open("path/to/comb_info.json", "w") as f:
+    json.dump(info, f, indent=4)
+```
+
+The resulting `comb_info.json` should contain:
+
+```json
+{
+    "src_label": "drums",
+    "submix_label_list": ["bass", "piano", "guitar"],
+    "wav_sr_ori": 44100,
+    "sample_rate_ae": 16000,
+    "sample_rate_clap": 48000,
+    "track_name": "track00001",
+    "cocola_score": 50.6234
+}
+```
+
+The dataset loader will automatically normalize all scores to [0, 1] using the global min/max across all datasets during training.
+
+### 5. Train Latent Diffusion Model
 
 ```bash
 bash scripts/train_dit.sh
