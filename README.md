@@ -1,408 +1,272 @@
-# 🎶 MGE-LDM
+# QAG-LDM
 
-&#x20;
+> **Quality-Aware Gated Multi-source Latent Diffusion Model for Music Generation and Source Extraction**
 
-> **Official implementation of the paper Joint Latent Diffusion for Simultaneous Music Generation and Source Extraction.**
-
-This repository is being updated.
 
 ---
 
-## 📋 Table of Contents
+## Table of Contents
 
-<!-- 1. [✨ Features](#✨-features) -->
-1. [📖 Paper & Samples](#paper--samples)
-2. [✨ Features](#features)
-3. [⚙️ Installation](#installation)
-4. [💾 Model Checkpoints](#model-checkpoints)
-5. [🛠️ Process Overview](#process-overview)
-6. [🚀 Inference](#inference)
-7. [🔗 Reference](#reference)
-8. [📚 Citation](#citation)
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Installation](#installation)
+4. [Model Checkpoints](#model-checkpoints)
+5. [Training](#training)
+6. [Inference](#inference)
+7. [Quality Control](#quality-control)
+8. [Reference](#reference)
+9. [Citation](#citation)
+
+---
+
+## Overview
+
+<p align="center">
+  <img src="figs/model_overview.png" width="68%" />
+  <img src="figs/gsa_mechanism.png" width="28%" />
+</p>
+<p align="center">
+  <b>Left</b>: Overall pipeline with QT-Encoder. <b>Right</b>: Gated Self-Attention (GSA) mechanism.
+</p>
+
+QAG-LDM enhances multi-stem music generation and source extraction with quality-aware conditioning and adaptive gated modulation. The framework introduces:
+
+- **QT-Encoder**: Converts normalized COCOLA coherence scores into learnable quality tokens via sinusoidal encoding and a two-layer MLP, prepended as prefix tokens to the latent sequence.
+- **Gated Self-Attention (GSA)**: A head-specific, input-dependent gate applied to each attention head's output before projection, mitigating the attention sink phenomenon on timestep tokens.
+- **Auxiliary Quality Prediction**: A masked-quality training strategy with an auxiliary regression head that ensures quality information is encoded in hidden representations.
+
+The model supports total generation, partial generation, and source extraction within a single unified framework, trained jointly on Slakh2100, MUSDB18, and MoisesDB.
 
 ---
 
-## 📖 Paper & Samples <a id="paper--samples"></a>
+## Features
 
-* **Paper**: [arXiv](https://arxiv.org/abs/2505.23305)
-* **Sample Page**: [link](https://yoongi43.github.io/MGELDM_Samples/)
-* **Real World Samples**: [link](https://agreeable-diplodocus-5ca.notion.site/Additional-Real-World-Audio-Samples-with-MGE-LDM-23644c3c089d80cfb46bdf3aed1ffd8b?source=copy_link)
+- **Total Generation**: Generate complete multi-track music from text prompts with quality control.
+- **Source Extraction**: Extract individual sources (bass, drums, guitar, piano, etc.) from mixed audio.
+- **Partial Generation**: Generate missing stems to accompany existing audio with coherence-aware conditioning.
+- **Quality-Aware Inference**: Adjust the quality score parameter to control the coherence and fidelity of generated audio.
+- **Flexible CFG**: Independent guidance scales for text and quality conditions.
 
 ---
-## ✨ Features <a id="features"></a>
-<!-- <div style="display: flex; gap: 1rem; align-items: flex-start;">
-  <div style="width:55%; margin: 0;">
-    <img src="figs/training_mgeldm.png" alt="Training Overview" style="width: 100%;" />
-    <p style="text-align: center; margin-top: 0.5rem;">
-      Training Overview<br>
-    </p>
-  </div>
-  <div style="width:41%; margin: 0;">
-    <img src="figs/inference_mgeldm.png" alt="Inference Workflow" style="width: 100%;" />
-    <p style="text-align: center; margin-top: 0.5rem;">
-        Inference Workflow<br>
-    </p>
-  </div>
-</div> -->
 
-**Training / Inference Overview**
-<div style="display: flex; gap: 1rem; align-items: center;">
-  <img src="figs/training_mgeldm.png" alt="Training Overview" width="56%" />
-  <img src="figs/inference_mgeldm.png" alt="Inference Workflow" width="41.4%" />
-</div>
-
-MGE‑LDM can simultaneously generate music and extract sources - refer to the paper and the [🚀 Inference](#inference) section below for details.
-
-- **Total Generation**  
-  Generate a complete music track from a text prompt.
-- **Source Extraction**  
-  Extract desired individual sources (e.g., vocals, bass, drums) from a mixed audio using a text query.
-- **Partial Generation**  
-  Impute and add missing sources to an existing mix based on a textual description.
----
-
-
-## ⚙️ Installation <a id="installation"></a>
+## Installation
 
 1. **Clone the repo**:
 
    ```bash
-   git clone https://github.com/yoongi43/MGE-LDM.git
-   cd MGE-LDM
+   git clone https://github.com/locacaca/QAG-LDM.git
+   cd QAG-LDM
    ```
+
 2. **Create environment**:
 
    ```bash
-   conda env create -n mgeldm python=3.9
-   conda activate mge-ldm
+   conda create -n qagldm python=3.9
+   conda activate qagldm
    ```
-3. **Install dependencies**:
+
+3. **Install PyTorch**:
 
    ```bash
    conda install pytorch==2.3.1 torchvision==0.18.1 torchaudio==2.3.1 pytorch-cuda=12.1 -c pytorch -c nvidia
    ```
-   ```
+
+4. **Install dependencies**:
+
+   ```bash
    pip install -r requirements.txt
    ```
----
-
-## 💾 Model Checkpoints <a id="model-checkpoints"></a>
-
-> **Note:** This checkpoint is distinct from the one used in the original paper; it was trained with additional data (MTG Jamendo, MedleyDB, etc.) and uses alternative hyperparameters.
-
-**AutoEncoder**: [unwrapped_AE.ckpt](https://drive.google.com/file/d/1BmEUvakYYAPcQfn84Z9rioya08DzZqdp/view?usp=sharing)
-
-**LDM (DiT)**: [unwrapped_DiT.ckpt](https://drive.google.com/file/d/1tyND8iI5Whs6_Oe-pBK2SpysGLKKa6sR/view?usp=sharing)
-
-(Note: The DiT checkpoint includes both the diffusion model and autoencoder weights.
-You do not need to download the autoencoder checkpoint separately for inference--only the DiT checkpoint is required.)
-
-**CLAP Checkpoint**: download ```music_audioset_epoch_15_esc_90.14.pt``` from [laion_clap](https://github.com/LAION-AI/CLAP) repository.
 
 ---
 
-## 🛠️ Process Overview <a id="process-overview"></a>
+## Model Checkpoints
 
-### 1. Download datasets
+| Component | Description |
+|-----------|-------------|
+| AutoEncoder | VAE encoder/decoder (C=64, downsampling ratio 2048) |
+| LDM (DiT) | 24-layer diffusion transformer with GSA (includes AE weights) |
+| CLAP | `music_audioset_epoch_15_esc_90.14.pt` from [LAION-CLAP](https://github.com/LAION-AI/CLAP) |
+| COCOLA | Frozen `COCOLA-HP-v1` for quality score computation |
+
+Place checkpoints under `ckps/` or specify paths in config files.
+
+---
+
+## Training
+
+### 1. Download Datasets
+
 - [Slakh2100](https://zenodo.org/records/4599666)
 - [MUSDB18](https://zenodo.org/records/3338373)
-- [Moises](https://music.ai/research/)
+- [MoisesDB](https://music.ai/research/)
 
 ### 2. Train AutoEncoder
-Run the following script: ```bash scripts/train_ae.sh```
-
-
-``` bash 
-## See scripts/train_ae.sh
-
-SAVE_DIR="/data2/yoongi/MGE_LDM"
-CONFIG_NAME="default_ae" # See configs/default_ae.yaml for details.
-GPU=0 # Set GPU ID
-CKPT_PATH="" # Optional: Path to resume training
-
-## Set CPU cores with `taskset -c` command.
-CUDA_VISIBLE_DEVICES=$GPU \
-taskset -c 64-79 \
-python train_ae.py \
---config-name $CONFIG_NAME \
-save_dir=$SAVE_DIR
-# ckpt_path=$CKPT_PATH ## Add if resuming training.
-```
-
-After training, unwrap the AutoEncoder from pytorch lightning trainer by running the following script:
-
-```bash scripts/unwrap_ae_script.sh```
 
 ```bash
-## See scripts/unwrap_ae_script.sh
-GPU=0 # Set GPU ID
-CKPT_DIR="...MGE_LDM/default_ae/checkpoints/"
-CKPT_PATH=$CKPT_DIR"last.ckpt"
-
-OUTPUT_PATH=$CKPT_DIR"unwrapped_AE"
-
-CUDA_VISIBLE_DEVICES=$GPU \
-python unwrap_model.py \
-    --config-name default_ae \
-    +type=autoencoder \
-    ckpt_path=${CKPT_PATH} \
-    +use_safetensors=false \
-    +output_name=${OUTPUT_PATH}
+bash scripts/train_ae.sh
 ```
 
-### 3. Data Prepration for LDM training
-- Encode audio into latent representations and compute CLAP latents.
-- Precompute and save all latents to ```pre_extracted_latents/``` to avoid on-the-fly computation overhead.
-- See ```scripts/pre_encode_script.sh``` for details.
+After training, unwrap the checkpoint:
 
+```bash
+bash scripts/unwrap_ae_script.sh
+```
+
+### 3. Data Preparation
+
+Encode audio into latent representations and compute CLAP/COCOLA features:
+
+```bash
+bash scripts/pre_encode_script.sh
+```
+
+The pre-encoded data structure:
 
 ```
-Structure of pre_extracted_latents:
-
 pre_extracted_latents/
-├── zero_latent.npy           # For salient segment loading
 ├── slakh2100/
 │   ├── train/
-│   │   ├──track00000/
+│   │   ├── track00000/
 │   │   │   ├── mix.npy
 │   │   │   ├── mix_clap.npy
-│   │   │   ├──comb0/
+│   │   │   ├── comb0/
 │   │   │   │   ├── src.npy
 │   │   │   │   ├── src_clap.npy
 │   │   │   │   ├── submix.npy
 │   │   │   │   ├── submix_clap.npy
-│   │   │   │   └── comb_info.json
-│   │   │   ├──comb1/
-│   │   │   │   ├── src.npy
-│   │   │   │   ├── src_clap.npy
-│   │   │   │   ├── submix.npy
-│   │   │   │   ├── submix_clap.npy
-│   │   │   │   └── comb_info.json
+│   │   │   │   └── comb_info.json  (includes cocola_score)
 │   │   │   ...
-│   │   ├──track00001/
-│   │   ...
-│   │
-│   ├── valid/... 
-│   ...
-│   ├── test/...  
-│
-├── musdb18/...  # optional datasets
-...
-├── moisesdb/...  # optional datasets
-...
+│   ├── valid/...
+│   ├── test/...
+├── musdb18/...
+├── moisesdb/...
 ```
----
+
 ### 4. Train Latent Diffusion Model
 
-Run the following script to train MGE-LDM:
-```bash scripts/train_dit.sh```
 ```bash
-## See scripts/train_dit.sh
-## Set CPU cores with `taskset -c` command.
-GPU=0 # Set GPU ID
-# GPU="6,7" # For multi-GPU training
-
-SAVE_DIR="/data2/yoongi/MGE_LDM"
-CONFIG_NAME="dit" # See configs/dit.yaml for details.
-CKPT_PATH="" # Optional: Path to resume training
-
-AE_CKPT_PATH=".../unwrapped_AE.ckpt" # Path to the unwrapped AutoEncoder checkpoint.
-
-CUDA_VISIBLE_DEVICES=$GPU \
-taskset -c 16-79 \
-python train_dit.py \
---config-name $CONFIG_NAME \
-save_dir=$SAVE_DIR \
-autoencoder_ckpt_path=$AE_CKPT_PATH
-# ckpt_path=$CKPT_PATH ## Add if resuming training.
-
-
-# ## Mutlti-GPU Training
-# CUDA_VISIBLE_DEVICES=$GPU \
-# torchrun --nproc_per_node gpu train_dit.py \
-# --config-name $CONFIG_NAME \
-# save_dir=$SAVE_DIR
-# autoencoder_ckpt_path=$AE_CKPT_PATH
+bash scripts/train_dit.sh
 ```
 
-After training, unwrap DiT from pytorch lightning trainer by running the following script:
+Key training hyperparameters (see `configs/trainer/dit.yaml`):
 
-```bash scripts/unwrap_dit_script.sh```
+| Parameter | Value |
+|-----------|-------|
+| Optimizer | AdamW (lr=5e-5, betas=(0.9, 0.999), wd=0.001) |
+| Scheduler | InverseLR (inv_gamma=1e6, power=0.5) |
+| CFG dropout | 0.4 |
+| Timestep dropout | 0.75 |
+| Quality mask prob | 0.15 |
+| Quality aux loss weight | 0.1 |
+| Gradient clip | 1.0 |
+| EMA | enabled |
+
+After training, unwrap the DiT checkpoint:
 
 ```bash
-## See scripts/unwrap_dit_script.sh
-
-GPU=0 # Set GPU ID
-## Set config name / checkpoint path to unwrap.
-CONFIG_NAME="dit"
-CKPT_DIR="/data2/yoongi/MGE_LDM/${CONFIG_NAME}/checkpoints/"
-CKPT_PATH=$CKPT_DIR"last.ckpt"
-
-OUTPUT_PATH=$CKPT_DIR"unwrapped_DiT"
-
-CUDA_VISIBLE_DEVICES=$GPU \
-python unwrap_model.py \
-    --config-name $CONFIG_NAME \
-    +type=mgeldm \
-    ckpt_path=${CKPT_PATH} \
-    +use_safetensors=false \
-    +output_name=${OUTPUT_PATH}
+bash scripts/unwrap_dit_script.sh
 ```
 
+---
 
-## 🚀 Inference <a id="inference"></a>
+## Inference
+
+All inference tasks support the `--quality_score` parameter (range 0.0-1.0, recommended 0.8).
+
 ### Total Generation
-Run ```bash scripts/infer_total_gen.sh```
+
 ```bash
-## See scripts/infer_total_gen.sh
-
-GPU=0 # Set GPU ID
-
-CONFIG_NAME="dit"
-# Path to the trained LDM checkpoint. Can be downloaded from the model checkpoint section.
-CKPT_DIR="/data2/yoongi/MGE_LDM/${CONFIG_NAME}/checkpoints/"
-CKPT_PATH=$CKPT_DIR"unwrapped_DiT.ckpt" 
-
-OUTPUT_DIR="./outputs_infer/"
-
-## Inference Condition
-TASK="total_gen" # Total Generation
-GEN_AUDIO_DUR=30.0 # Set the duration of the generated audio in seconds.
-GIVEN_WAV_PATH=null
-
-## Set text prompt here
-TEXT_PROMPT="Lo-fi hip hop beat with mellow jazzy chords and a smooth bassline"
-# TEXT_PROMPT="Upbeat electronic dance music with catchy synth melodies and driving bass"
-
-## Generation Configuration
-NUM_STEPS=50
-CFG_SCALE=6.0
-OVERLAP_DUR=5.0 ## Overlap duration in seconds for continuation. (MGE-LDM processes audio in chunks)
-REPAINT_N=4 ## Multiple repainting steps for better quality (for continuation)
-
-
-CUDA_VISIBLE_DEVICES=$GPU \
 python infer.py \
-    --config-name $CONFIG_NAME \
-    +task=$TASK \
-    ckpt_path=${CKPT_PATH} \
-    +gen_audio_dur=${GEN_AUDIO_DUR} \
-    +given_wav_path=${GIVEN_WAV_PATH} \
-    "+text_prompt='${TEXT_PROMPT}'" \
-    +num_steps=${NUM_STEPS} \
-    +cfg_scale=${CFG_SCALE} \
-    +overlap_dur=${OVERLAP_DUR} \
-    +repaint_n=${REPAINT_N} \
-    +output_dir=${OUTPUT_DIR}
+    --config-name dit \
+    +task=total_gen \
+    ckpt_path=PATH_TO_CHECKPOINT \
+    +gen_audio_dur=12.8 \
+    "+text_prompt='Lo-fi hip hop beat with mellow jazzy chords'" \
+    +num_steps=250 \
+    +cfg_scale=2.0 \
+    +quality_score=0.8 \
+    +output_dir=./outputs/
 ```
 
 ### Source Extraction
-Run ```bash scripts/infer_src_ext.sh```
+
 ```bash
-## See scripts/infer_src_ext.sh
-#!/bin/bash
-
-GPU=0 # Set GPU ID
-## Set checkpoint path
-CONFIG_NAME="dit"
-CKPT_DIR="/data2/yoongi/MGE_LDM/${CONFIG_NAME}/checkpoints/"
-CKPT_PATH=$CKPT_DIR"unwrapped_DiT.ckpt"
-
-OUTPUT_DIR="./outputs_infer/"
-
-## Inference Condition
-TASK="source_extract"
-
-GIVEN_WAV_PATH="data_sample/bruno_24kmagic_seg.wav"
-# GIVEN_WAV_PATH="data_sample/sakanaction_music_seg.wav"
-# GIVEN_WAV_PATH="data_sample/charlie_attention_seg.wav"
-
-TEXT_PROMPT="The sound of vocals"
-# TEXT_PROMPT="The sound of drums"
-# TEXT_PROMPT="The sound of the synthesizer"
-
-## GEN / Inpaint Condition
-NUM_STEPS=200
-CFG_SCALE=10.0
-OVERLAP_DUR=5.0
-REPAINT_N=1 
- 
-
-CUDA_VISIBLE_DEVICES=$GPU \
 python infer.py \
-    --config-name $CONFIG_NAME \
-    +task=$TASK \
-    ckpt_path=${CKPT_PATH} \
-    +given_wav_path=${GIVEN_WAV_PATH} \
-    "+text_prompt='${TEXT_PROMPT}'" \
-    +num_steps=${NUM_STEPS} \
-    +cfg_scale=${CFG_SCALE} \
-    +overlap_dur=${OVERLAP_DUR} \
-    +repaint_n=${REPAINT_N} \
-    +output_dir=${OUTPUT_DIR}
-```
-### Partial Generation (Source Imputation)
-Run ```bash scripts/infer_partial_gen.sh```
-```bash
-## See scripts/infer_partial_gen.sh
-
-GPU=0 # Set GPU ID
-## Set checkpoint path
-CONFIG_NAME="dit"
-CKPT_DIR="/data2/yoongi/MGE_LDM/${CONFIG_NAME}/checkpoints/"
-CKPT_PATH=$CKPT_DIR"unwrapped_DiT.ckpt"
-
-OUTPUT_DIR="./outputs_infer/"
-
-## Inference Condition
-TASK="partial_gen"
-GIVEN_WAV_PATH="data_sample/bruno_24kmagic_seg.wav"
-# GIVEN_WAV_PATH="data_sample/sakanaction_music_seg.wav"
-# GIVEN_WAV_PATH="data_sample/charlie_attention_seg.wav"
-
-
-TEXT_PROMPT="The sound of the distorted guitar"
-# TEXT_PROMPT="Jazz piano improvisation"
-# TEXT_PROMPT="Guitar solo"
-# TEXT_PROMPT="The sound of strings section"
-
-## GEN / Inpaint Condition
-NUM_STEPS=100
-CFG_SCALE=6.0
-OVERLAP_DUR=5.0
-REPAINT_N=1
-
-
-CUDA_VISIBLE_DEVICES=$GPU \
-python infer.py \
-    --config-name $CONFIG_NAME \
-    +task=$TASK \
-    ckpt_path=${CKPT_PATH} \
-    +given_wav_path=${GIVEN_WAV_PATH} \
-    "+text_prompt='${TEXT_PROMPT}'" \
-    +num_steps=${NUM_STEPS} \
-    +cfg_scale=${CFG_SCALE} \
-    +overlap_dur=${OVERLAP_DUR} \
-    +repaint_n=${REPAINT_N} \
-    +output_dir=${OUTPUT_DIR}
+    --config-name dit \
+    +task=source_extract \
+    ckpt_path=PATH_TO_CHECKPOINT \
+    +given_wav_path=path/to/mixed_audio.wav \
+    "+text_prompt='The sound of vocals'" \
+    +num_steps=250 \
+    +cfg_scale=2.0 \
+    +quality_score=0.8 \
+    +output_dir=./outputs/
 ```
 
+### Partial Generation
 
-
-## 🔗 Reference <a id="reference"></a>
-The codes are build upon the following repositories:
-* **Stable Audio Tools** by Stability-AI: [stable-audio-tools](https://github.com/Stability-AI/stable-audio-tools)
-* **Friendly Stable Audio Tools** by Yukara Ikemiya: [friendly-stable-audio-tools](https://github.com/yukara-ikemiya/friendly-stable-audio-tools)
+```bash
+python infer.py \
+    --config-name dit \
+    +task=partial_gen \
+    ckpt_path=PATH_TO_CHECKPOINT \
+    +given_wav_path=path/to/submix_audio.wav \
+    "+text_prompt='Jazz piano improvisation'" \
+    +num_steps=250 \
+    +cfg_scale=2.0 \
+    +quality_score=0.8 \
+    +output_dir=./outputs/
+```
 
 ---
 
-## 📚 Citation <a id="citation"></a>
+## Quality Control
 
-```bibtex
-@article{chae2025mge,
-  title={MGE-LDM: Joint Latent Diffusion for Simultaneous Music Generation and Source Extraction},
-  author={Chae, Yunkee and Lee, Kyogu},
-  journal={arXiv preprint arXiv:2505.23305},
-  year={2025}
-}
+The quality score controls the coherence and fidelity of generated audio:
+
+| Quality Score | Effect |
+|---------------|--------|
+| 0.2 | Lower coherence, more diverse but potentially misaligned |
+| 0.5 | Moderate coherence |
+| 0.8 | High coherence and fidelity (recommended) |
+
+The quality token is derived from COCOLA scores computed on (sub-mixture, source) pairs during training. At inference, setting a higher quality score guides the model toward generating audio with stronger inter-track coordination.
+
+To run inference without quality control (baseline mode):
+
+```bash
+python infer_no_quality.py \
+    --config-name dit \
+    +task=total_gen \
+    ckpt_path=PATH_TO_CHECKPOINT \
+    ...
+```
+
+---
+
+## Reference
+
+Built upon:
+
+- [MGE-LDM](https://github.com/yoongi43/MGE-LDM) by Yunkee Chae and Kyogu Lee
+- [Stable Audio Tools](https://github.com/Stability-AI/stable-audio-tools) by Stability AI
+- [COCOLA](https://github.com/Pliploop/COCOLA) for coherence evaluation
+- [LAION-CLAP](https://github.com/LAION-AI/CLAP) for text-audio alignment
+
+---
+
+[//]: # (## Citation)
+
+[//]: # ()
+[//]: # (```bibtex)
+
+[//]: # (@article{lin2025qagldm,)
+
+[//]: # (  title={QAG-LDM: Quality-Aware Gated Multi-source Latent Diffusion Model for Music Generation and Source Extraction},)
+
+[//]: # (  author={Lin, Qinran and Wang, Yiqun and Zhang, Hao and Li, Yong},)
+
+[//]: # (  year={2025})
+
+[//]: # (})
 ```

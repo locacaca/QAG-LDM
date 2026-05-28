@@ -4,7 +4,7 @@ export PYTHONPATH=/app/data/code/MGE-LDM-main
 # EXPNAME=$1
 # GPU=$2
 # GPU=5
-export http_proxy="http://10.242.13.204:7890"
+export http_proxy="http://10.242.26.231:7890"
 export https_proxy="$http_proxy"
 export HTTP_PROXY="$http_proxy"
 export HTTPS_PROXY="$https_proxy"
@@ -20,7 +20,7 @@ NUM_GPU=1
 # CKPT_DIR="/data2/yoongi/MGE_LDM/default_dit/checkpoints/"
 # CKPT_PATH=$CKPT_DIR"last.ckpt"
 
-SAVE_DIR="/app/data/code/test_code/MGE-LDM-main/ckps/gate_quality_aux_loss_X_HiddenState"
+SAVE_DIR="/app/data/code/test_code/MGE-LDM-main/ckps/test"
 CONFIG_NAME="dit"
 
 
@@ -28,7 +28,7 @@ CONFIG_NAME="dit"
 
 AE_CKPT_PATH="/app/data/code/MGE-LDM-main/ckps/ae/unwrapped_AE.ckpt"
 CLAP_CKPT_PATH="/app/data/code/MGE-LDM-main/ckps/clap/music_audioset_epoch_15_esc_90.14.pt"
-CKPT_PATH=""
+#CKPT_PATH="/app/data/code/test_code/MGE-LDM-main/ckps/nongate_quality_aux_loss_X_HiddenState/dit/checkpoints/last.ckpt"
 #CKPT_PATH="/app/data/code/test_code/MGE-LDM-main/ckps/slakh_musdb18_moisesdb/dit/checkpoints/last-v1.ckpt"
 # CUDA_VISIBLE_DEVICES=$GPU \
 # taskset -c 16-79 \
@@ -42,7 +42,7 @@ CKPT_PATH=""
 
 ## Mutlti-GPU Training
 CUDA_VISIBLE_DEVICES=$GPU \
-torchrun --master_port 29500 --nproc_per_node gpu train_dit.py \
+torchrun --master_port 29502 --nproc_per_node gpu train_dit.py \
 --config-name $CONFIG_NAME \
 save_dir=$SAVE_DIR \
 autoencoder_ckpt_path=$AE_CKPT_PATH \

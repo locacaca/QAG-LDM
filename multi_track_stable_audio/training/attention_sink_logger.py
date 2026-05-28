@@ -143,12 +143,22 @@ class AttentionSinkLogger:
         self.all_layers_attn_maps = []
         self.loss_history = []
 
-    def _save_data(self):
+    def flush_pending(self, tag: Optional[str] = None):
+        if (
+            len(self.first_token_attention) == 0
+            and len(self.all_layers_attn_maps) == 0
+            and len(self.loss_history) == 0
+        ):
+            return
+        self._save_data(tag=tag)
+
+    def _save_data(self, tag: Optional[str] = None):
         suffix = "_gated" if self.gated_mode else "_ungated"
+        tag_suffix = f"_{tag}" if tag else ""
 
         curve_path = os.path.join(
             self.log_dir,
-            f"attention_sink_curve{suffix}_epoch{self.epoch_count}.csv",
+            f"attention_sink_curve{suffix}_epoch{self.epoch_count}{tag_suffix}.csv",
         )
         with open(curve_path, "w", newline="") as f:
             writer = csv.DictWriter(
@@ -168,7 +178,7 @@ class AttentionSinkLogger:
 
         attn_path = os.path.join(
             self.log_dir,
-            f"all_layers_attn{suffix}_epoch{self.epoch_count}.pt",
+            f"all_layers_attn{suffix}_epoch{self.epoch_count}{tag_suffix}.pt",
         )
         torch.save(
             {
@@ -194,7 +204,7 @@ class AttentionSinkLogger:
             )
             loss_path = os.path.join(
                 self.log_dir,
-                f"loss_curve{suffix}_epoch{self.epoch_count}.csv",
+                f"loss_curve{suffix}_epoch{self.epoch_count}{tag_suffix}.csv",
             )
             with open(loss_path, "w", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=["step"] + loss_keys)

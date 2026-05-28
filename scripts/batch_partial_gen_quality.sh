@@ -166,6 +166,7 @@ for QUALITY_SCORE in "${QUALITY_SCORES[@]}"; do
                 +given_wav_path=${GIVEN_WAV_PATH} \
                 "+text_prompt='${TEXT_PROMPT}'" \
                 +quality_score=${QUALITY_SCORE} \
+                +enable_attention_gating=true \
                 +num_steps=${NUM_STEPS} \
                 +cfg_scale=${CFG_SCALE} \
                 +overlap_dur=${OVERLAP_DUR} \

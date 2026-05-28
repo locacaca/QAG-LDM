@@ -28,7 +28,8 @@ class MGELDM(nn.Module):
         global_cond_keys: tp.List[str],
         fusion_divergence_type: str = "squared_euclidean",
         fusion_temperature: float = 1.0,
-        enable_crossatten: bool = False,
+        enable_quality_control: bool = True,
+        enable_attention_gating: bool = True,
         num_quality_tokens: int = 1,
         quality_token_dim: int = 512,
         quality_mask_prob: float = 0.15,
@@ -56,14 +57,16 @@ class MGELDM(nn.Module):
             transformer_type="continuous_transformer",
             norm_type=norm_type,
             use_t_emb_trackwise=use_t_emb_trackwise,
-            enable_crossatten=enable_crossatten,
+            enable_quality_control=enable_quality_control,
+            enable_attention_gating=enable_attention_gating,
             num_quality_tokens=num_quality_tokens,
             quality_token_dim=quality_token_dim,
             quality_mask_prob=quality_mask_prob,
             **kwargs,
         )
 
-        self.enable_crossatten = enable_crossatten
+        self.enable_quality_control = enable_quality_control
+        self.enable_attention_gating = enable_attention_gating
         self.num_quality_tokens = num_quality_tokens
         self.quality_token_dim = quality_token_dim
         self.quality_mask_prob = quality_mask_prob
@@ -79,7 +82,8 @@ class MGELDM(nn.Module):
         self.pretransform = pretransform
         self.global_cond_keys = global_cond_keys
         self.num_tracks = num_tracks
-        self.enable_crossatten = enable_crossatten
+        self.enable_quality_control = enable_quality_control
+        self.enable_attention_gating = enable_attention_gating
         self.num_quality_tokens = num_quality_tokens
         self.quality_token_dim = quality_token_dim
         self.quality_mask_prob = quality_mask_prob
@@ -132,7 +136,7 @@ class MGELDM(nn.Module):
 
         quality_scores = None
 
-        if self.enable_crossatten:
+        if self.enable_quality_control:
             quality_scores_raw = conditioning_tensors.get("quality_scores_raw", None)
             if quality_scores_raw is not None:
                 if isinstance(quality_scores_raw, list):

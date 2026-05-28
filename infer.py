@@ -104,8 +104,35 @@ def inference(config):
     
     ## 质量控制参数
     config.quality_score: 质量分数，范围为0-1，默认为0.5（中等质量）
+    
+    ## Attention Gating 参数
+    config.enable_attention_gating: 是否启用注意力门控，默认从配置读取
     """
     print(f"Running task: {config.task}")
+    
+    # 检查 checkpoint 中的 enable_attention_gating 设置
+    # 这对于正确加载模型至关重要
+    # 优先级: 命令行参数 > MGELDM 配置 > trainer 配置 > 默认值 True
+    enable_attention_gating = getattr(config, 'enable_attention_gating', None)
+    
+    if enable_attention_gating is None:
+        # 从 MGELDM 配置中获取
+        if "MGELDM" in config.model:
+            enable_attention_gating = config.model["MGELDM"].get("enable_attention_gating", None)
+        else:
+            enable_attention_gating = config.model.get("enable_attention_gating", None)
+    
+    if enable_attention_gating is None:
+        # 从 trainer 配置中获取
+        enable_attention_gating = config.trainer.get("enable_attention_gating", True)
+    
+    # 强制将 enable_attention_gating 传递给模型配置
+    if "MGELDM" in config.model:
+        config.model["MGELDM"]["enable_attention_gating"] = enable_attention_gating
+    else:
+        config.model["enable_attention_gating"] = enable_attention_gating
+    
+    print(f"enable_attention_gating: {enable_attention_gating}")
     
     model = create_mgeldm_from_config(config.model)
     # ckpt = load_ckpt_state_dict(config.ckpt_path, adjust_key_names=True)
@@ -397,10 +424,11 @@ def run_inference(
     overlap_dur: float = 1.0,
     repaint_n: int = 0,
     quality_score: float = 0.5,
-    enable_quality_control: bool = True,
     device: str = "cuda:0",
     segment_duration: float = None,
     random_segment: bool = False,
+    enable_attention_gating: bool = True,
+    **kwargs,
 ):
     """
     统一推理接口：支持 total_gen, partial_gen, source_extract
@@ -410,10 +438,20 @@ def run_inference(
         enable_quality_control: 是否启用质量控制，默认为True
         segment_duration: 片段时长（秒），用于随机截取音频片段，默认为None（不截取）
         random_segment: 是否启用随机片段截取，默认为False
+        enable_attention_gating: 是否启用注意力门控，必须与 checkpoint 匹配
     """
     _ensure_dir(out_dir)
 
     cfg = hydra.compose(config_name="default_dit")
+    
+    # 强制将 enable_attention_gating 传递给模型配置
+    if "MGELDM" in cfg.model:
+        cfg.model["MGELDM"]["enable_attention_gating"] = enable_attention_gating
+    else:
+        cfg.model["enable_attention_gating"] = enable_attention_gating
+    
+    print(f"enable_attention_gating: {enable_attention_gating}")
+    
     model = create_mgeldm_from_config(cfg.model)
     ckpt = load_ckpt_state_dict(ckpt_path)
     model.load_state_dict(ckpt, strict=True)
@@ -433,13 +471,10 @@ def run_inference(
         num_timesteps=num_steps,
         repaint_n=repaint_n,
         verbose=True,
+        quality_score=quality_score,
     )
     
     # 根据enable_quality_control参数决定是否传递quality_score
-    if enable_quality_control:
-        func_args['quality_score'] = quality_score
-    else:
-        func_args['quality_score'] = None
 
     gen_paths = {}
 

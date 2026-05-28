@@ -11,9 +11,31 @@ __pycache__/
 results/
 outputs/
 outputs_infer/
-
 !data_sample/**/*.wav
-# !outputs_infer/**/*.wav
+
+# Evaluation and validation scripts (not uploaded, only train/infer)
+eval_total_gen.py
+compute_fad_total_gen.py
+compute_fad_partial_gen.py
+compute_fad_total_msdm.py
+compute_fad_partial_for_msdm.py
+batch_compute_fad_partial_gen.py
+calculate_fad_means.py
+batch_partial_gen_processor.py
+batch_partial_gen_processor_no_quality.py
+batch_partial_gen_tasks.jsonl
+test_fad_values.txt
+tools/
+scripts/eval_all.sh
+scripts/eval_all_quality.sh
+scripts/batch_quality_generation.sh
+scripts/batch_partial_gen_quality.sh
+scripts/batch_partial_gen_no_quality.sh
+scripts/batch_partial_gen_quality_with_fad.sh
+scripts/batch_src_extract_quality.sh
+scripts/stat_logmel.sh
+scripts/extract_attention_logs_from_ckpt.sh
+docs/evaluation_metrics.md
 
 
 # Distribution / packaging

@@ -54,7 +54,7 @@ class PANNsEmbedder:
         import os
         from panns_inference import AudioTagging
 
-        self.sr = sr
+        self.sr = 32000  # PANNs CNN14 固定需要 32 kHz，忽略传入的 sr
         self.device = device
 
         if not os.path.exists(checkpoint):
@@ -64,13 +64,6 @@ class PANNsEmbedder:
         self.wrapper = AudioTagging(checkpoint_path=checkpoint, device=device)
         self.model = self.wrapper.model  # 这里才是 nn.Module
         self.model.eval()
-
-        self.mel = torchaudio.transforms.MelSpectrogram(
-            sample_rate=sr,
-            n_fft=1024,
-            hop_length=320,
-            n_mels=64
-        ).to(device)
 
     def __call__(self, audio):
         """
@@ -106,30 +99,26 @@ class PANNsEmbedder:
         with torch.no_grad():
             output = self.wrapper.inference(audio)
 
-            # 兼容 dict / tuple / list
-            if isinstance(output, dict):
-                emb = output.get("embedding", None)
-            elif isinstance(output, (tuple, list)):
-                emb = output[0]
-            elif torch.is_tensor(output):
-                emb = output
-            elif isinstance(output, np.ndarray):
-                emb = output
+            # AudioTagging.inference 返回 (clipwise_output, embedding)
+            # 必须用 output[1]（clip-level embedding，2048维），
+            # output[0] 是分类概率（527维，值域0~1），不适合FAD
+            if isinstance(output, (tuple, list)) and len(output) >= 2:
+                emb = output[1]
+            elif isinstance(output, dict):
+                emb = output.get("embedding", output.get("clipwise_output"))
             else:
-                raise TypeError(f"未知的输出类型: {type(output)}")
+                emb = output
 
         if emb is None:
             raise RuntimeError("PANNs inference 没有返回 embedding")
 
-        # ========== 6. mean pooling & 返回 numpy ==========
+        # shape 可能是 (1, D) 或 (D,)，统一返回 (D,)
         if torch.is_tensor(emb):
-            emb = emb.detach().cpu().mean(dim=0).numpy()
-        elif isinstance(emb, np.ndarray):
+            emb = emb.detach().cpu().numpy()
+        emb = np.asarray(emb, dtype=np.float32)
+        if emb.ndim == 2:
             emb = emb.mean(axis=0)
-        else:
-            raise TypeError(f"未知的 embedding 类型: {type(emb)}")
-
-        return emb
+        return emb.ravel()
 
 
 
@@ -226,48 +215,26 @@ class Evaluator:
     def __init__(self, cfg: EvalConfig):
         self.cfg = cfg
         try:
-            self.embedder = PANNsEmbedder(sr=cfg.sample_rate, device=_get_device())
+            self.embedder = PANNsEmbedder(sr=32000, device=_get_device())
         except Exception as e:
             raise RuntimeError('无法初始化 PANNs 嵌入器: %s' % str(e))
 
+    PANNS_SR = 32000  # PANNs CNN14 固定需要 32 kHz
+
     def _load_mono(self, path: str) -> np.ndarray:
         x, sr = sf.read(path)
-        print(f"[Debug] Loaded {path}: shape={x.shape}, sr={sr}")  # 打印原始 shape
+        if x.ndim > 1:
+            x = x.mean(axis=-1)
+        x = x.astype(np.float32)
+        if sr != self.PANNS_SR:
+            x_t = torch.from_numpy(x).unsqueeze(0)
+            x_t = torchaudio.functional.resample(x_t, sr, self.PANNS_SR)
+            x = x_t.squeeze(0).numpy()
+        return x
 
-        if sr != self.cfg.sample_rate:
-            x_t = torch.from_numpy(x).float()
-            if x_t.ndim == 1:
-                x_t = x_t.unsqueeze(0)
-            else:
-                # 保证通道在 axis 0
-                if x_t.shape[0] < x_t.shape[1]:
-                    x_t = x_t.T
-            x_t = torchaudio.functional.resample(x_t, sr, self.cfg.sample_rate)
-            x = x_t.numpy()
-
-        # 最终保证 x 是一维 numpy 数组
-        if isinstance(x, np.ndarray) and x.ndim > 1:
-            x = x.mean(axis=0)
-
-        print(f"[Debug] Final mono shape: {x.shape}")  # 打印最终 shape
-        return x.astype(np.float32)
-
-    def evaluate_item(self, gen_mix_path: str, ref_mix_path: str) -> Dict[str, float]:
-        if ref_mix_path is None:
-            return {}
-
-        # 读取生成音频和参考音频
-        g, r = self._load_mono(gen_mix_path), self._load_mono(ref_mix_path)
-
-        # ==== 输出音频长度确认 ====
-        print(f"[Debug] Generated audio length: {len(g)} samples, Reference audio length: {len(r)} samples")
-
-        # 调用 PANNs 嵌入器
-        eg, er = self.embedder(g), self.embedder(r)
-
-        # 计算 FAD
-        fad = compute_fad(eg, er)
-        return {"FAD": fad}
+    def embed(self, path: str) -> np.ndarray:
+        """返回单条音频的 clip-level embedding (D,)。"""
+        return self.embedder(self._load_mono(path))
 
 
 # ========== Runner ==========
@@ -293,55 +260,80 @@ def run(hydra_cfg):
             items.append(EvalItem(uid=d["uid"], given_wav=d.get("given_wav"), ref_mix=d.get("ref_mix"), ref_sources=d.get("ref_sources", {})))
 
     evaluator = Evaluator(ecfg)
-    all_results = []
+    gen_paths_list = []   # [(uid, gen_mix_path, ref_mix_path)]
 
+    # -----------------------------------------------------------------------
+    # 第一阶段：生成所有音频
+    # -----------------------------------------------------------------------
     for it in items:
         out_dir = os.path.join(ecfg.output_root, ecfg.task, it.uid)
         _ensure_dir(out_dir)
-        
-        # 清理GPU缓存
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-        
-        # ==== 调用 infer.py 的生成逻辑 ====
+
         gen_paths = infer.run_inference(
             ckpt_path=ecfg.ckpt_path,
             task=ecfg.task,
             text_prompt=ecfg.text_prompt,
             given_wav=it.given_wav,
             out_dir=out_dir,
-            quality_score=ecfg.quality_score,  # 添加质量控制参数
-            enable_quality_control=ecfg.enable_quality_control  # 添加质量控制开关
+            quality_score=ecfg.quality_score,
+            enable_quality_control=ecfg.enable_quality_control,
         )
-        
-        # 清理GPU缓存
+
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
             torch.cuda.synchronize()
-        
-        # ==== 评估 ====
-        metrics = evaluator.evaluate_item(gen_paths.get("mix"), it.ref_mix)
-        res = {"uid": it.uid, "metrics": metrics}
-        with open(os.path.join(out_dir, "metrics.json"), "w") as f:
-            json.dump(res, f, indent=2)
-        all_results.append(res)
-        print(f"[Eval] {it.uid}: {metrics}")
-        
-        # 强制垃圾回收
+
+        gen_mix = gen_paths.get("mix")
+        if gen_mix and it.ref_mix:
+            gen_paths_list.append((it.uid, gen_mix, it.ref_mix))
+            print(f"[Gen] {it.uid} -> {gen_mix}")
+        else:
+            print(f"[Skip] {it.uid}: gen_mix={gen_mix}  ref_mix={it.ref_mix}")
+
         import gc
         gc.collect()
 
-    # 聚合
-    agg = {}
-    for k in {m for r in all_results for m in r["metrics"]}:
-        vals = [r["metrics"][k] for r in all_results if k in r["metrics"]]
-        agg[k] = float(np.mean(vals))
-    with open(os.path.join(ecfg.output_root, f"summary_{ecfg.task}.json"), "w") as f:
-        json.dump({"aggregate": agg, "items": all_results}, f, indent=2)
-    print("==== Aggregate ====")
-    for k, v in agg.items():
-        print(f"{k}: {v:.4f}")
+    # -----------------------------------------------------------------------
+    # 第二阶段：population-level FAD（一次性拟合所有样本的高斯）
+    # -----------------------------------------------------------------------
+    print(f"\n[FAD] Embedding {len(gen_paths_list)} pairs for population-level FAD...")
+    gen_embs, ref_embs = [], []
+    item_records = []
+    for uid, gen_mix, ref_mix in gen_paths_list:
+        try:
+            gen_embs.append(evaluator.embed(gen_mix))
+            ref_embs.append(evaluator.embed(ref_mix))
+            item_records.append({"uid": uid, "gen_mix": gen_mix, "ref_mix": ref_mix})
+            print(f"  embedded {len(gen_embs)}/{len(gen_paths_list)}", end="\r")
+        except Exception as e:
+            print(f"\n  [WARN] skipped {uid}: {e}")
+    print()
+
+    if not gen_embs:
+        print("[FAD] No valid pairs, cannot compute FAD.")
+        return
+
+    gen_embs_arr = np.stack(gen_embs, axis=0)   # (N, D)
+    ref_embs_arr = np.stack(ref_embs, axis=0)   # (N, D)
+
+    fad_val = compute_fad(gen_embs_arr, ref_embs_arr)
+    print(f"\n==== Population FAD = {fad_val:.6f}  "
+          f"(n={gen_embs_arr.shape[0]}) ====")
+
+    summary = {
+        "population_fad": float(fad_val),
+        "gen_count": int(gen_embs_arr.shape[0]),
+        "quality_score": ecfg.quality_score,
+        "items": item_records,
+    }
+    summary_path = os.path.join(ecfg.output_root, f"summary_{ecfg.task}.json")
+    with open(summary_path, "w") as f:
+        json.dump(summary, f, indent=2)
+    print(f"Saved: {summary_path}")
 
 
 if __name__ == "__main__":

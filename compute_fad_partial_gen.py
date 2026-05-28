@@ -1,7 +1,7 @@
 import argparse
 import json
 import os
-from typing import List, Dict, Optional
+from typing import List
 
 import numpy as np
 import torch
@@ -10,162 +10,182 @@ import soundfile as sf
 from scipy.linalg import sqrtm
 
 
-def _get_device(prefer_gpu: bool = True) -> str:
-    if prefer_gpu and torch.cuda.is_available():
-        return "cuda"
-    return "cpu"
-
-
-class PANNsEmbedder:
-    def __init__(self, sr=32000, device="cuda", checkpoint="/root/panns_data/Cnn14_mAP=0.431.pth"):
-        from panns_inference import AudioTagging
-        self.sr = sr
-        self.device = device
-        if not os.path.exists(checkpoint):
-            raise FileNotFoundError(f"PANNs checkpoint not found: {checkpoint}")
-        self.wrapper = AudioTagging(checkpoint_path=checkpoint, device=device)
-        self.model = self.wrapper.model
-        self.model.eval()
-
-    def __call__(self, audio):
-        import numpy as np
-        if audio is None:
-            raise ValueError("输入音频为空")
-        if isinstance(audio, np.ndarray):
-            audio = torch.from_numpy(audio).float()
-        elif isinstance(audio, list):
-            audio = torch.tensor(audio, dtype=torch.float32)
-        if audio.dim() == 1:
-            audio = audio.unsqueeze(0)
-        min_len = 1024
-        if audio.size(-1) < min_len:
-            pad_width = min_len - audio.size(-1)
-            audio = torch.nn.functional.pad(audio, (0, pad_width))
-        audio = audio.to(self.device)
-        with torch.no_grad():
-            output = self.wrapper.inference(audio)
-            if isinstance(output, dict):
-                emb = output.get("embedding", None)
-            elif isinstance(output, (tuple, list)):
-                emb = output[0]
-            elif torch.is_tensor(output):
-                emb = output
-            elif isinstance(output, np.ndarray):
-                emb = output
-            else:
-                raise TypeError(f"未知的输出类型: {type(output)}")
-        if emb is None:
-            raise RuntimeError("PANNs inference 没有返回 embedding")
-        if torch.is_tensor(emb):
-            emb = emb.detach().cpu().mean(dim=0).numpy()
-        elif isinstance(emb, np.ndarray):
-            emb = emb.mean(axis=0)
-        else:
-            raise TypeError(f"未知的 embedding 类型: {type(emb)}")
-        return emb
-
-
-def compute_fad(emb_gen: np.ndarray, emb_ref: np.ndarray) -> float:
-    def _norm(x: np.ndarray) -> np.ndarray:
-        if x is None:
-            return None
-        if x.ndim == 1:
-            return x[np.newaxis, :]
-        if x.ndim == 3:
-            b, t, d = x.shape
-            return x.reshape(b * t, d)
-        if x.ndim == 2:
-            return x
-        raise RuntimeError("不支持的 embedding 维度: %d" % x.ndim)
-
-    emb_gen = _norm(emb_gen)
-    emb_ref = _norm(emb_ref)
-    if emb_gen.shape[0] == 1:
-        emb_gen = np.vstack([emb_gen, emb_gen])
-    if emb_ref.shape[0] == 1:
-        emb_ref = np.vstack([emb_ref, emb_ref])
-    mu1, mu2 = emb_gen.mean(0), emb_ref.mean(0)
-    cov1, cov2 = np.cov(emb_gen, rowvar=False), np.cov(emb_ref, rowvar=False)
-    if cov1.ndim == 0:
-        cov1 = np.array([[float(cov1)]])
-    if cov2.ndim == 0:
-        cov2 = np.array([[float(cov2)]])
-    diff = mu1 - mu2
-    covmean = sqrtm(cov1 @ cov2)
-    if np.iscomplexobj(covmean):
-        covmean = covmean.real
-    try:
-        val = float(diff @ diff + np.trace(cov1 + cov2 - 2 * covmean))
-    except Exception:
-        cov1_diag = np.diag(np.diag(cov1))
-        cov2_diag = np.diag(np.diag(cov2))
-        covmean = sqrtm(cov1_diag @ cov2_diag)
-        if np.iscomplexobj(covmean):
-            covmean = covmean.real
-        val = float(diff @ diff + np.trace(cov1_diag + cov2_diag - 2 * covmean))
-    return val
-
+# ---------------------------------------------------------------------------
+# Audio loading
+# ---------------------------------------------------------------------------
 
 def _load_mono(path: str, target_sr: int) -> np.ndarray:
     if not os.path.isfile(path):
         raise FileNotFoundError(f"Audio not found: {path}")
     x, sr = sf.read(path)
+    if x.ndim > 1:
+        x = x.mean(axis=-1)
+    x = x.astype(np.float32)
     if sr != target_sr:
-        x_t = torch.from_numpy(x).float()
-        if x_t.ndim == 1:
-            x_t = x_t.unsqueeze(0)
-        else:
-            if x_t.shape[0] < x_t.shape[1]:
-                x_t = x_t.T
+        x_t = torch.from_numpy(x).unsqueeze(0)
         x_t = torchaudio.functional.resample(x_t, sr, target_sr)
-        x = x_t.numpy()
-    if isinstance(x, np.ndarray) and x.ndim > 1:
-        x = x.mean(axis=0)
-    return x.astype(np.float32)
+        x = x_t.squeeze(0).numpy()
+    return x
 
 
-def compute_fad_for_pair_eval_style(gen_audio_path: str, ref_audio_paths: List[str], embedder: PANNsEmbedder) -> float:
-    target_sr = embedder.sr
-    g = _load_mono(gen_audio_path, target_sr)
-    eg = embedder(g)
-    ref_embeds = []
-    for p in ref_audio_paths:
-        r = _load_mono(p, target_sr)
-        er = embedder(r)
-        ref_embeds.append(er)
-    if len(ref_embeds) == 0:
-        raise ValueError("参考音频为空")
-    er_all = np.stack(ref_embeds, axis=0)
-    fad = compute_fad(eg, er_all)
+# ---------------------------------------------------------------------------
+# PANNs embedder — per-frame embeddings (standard FAD practice)
+# ---------------------------------------------------------------------------
+
+class PANNsEmbedder:
+    """
+    Extracts per-clip embeddings using PANNs CNN14.
+
+    Standard FAD (Kilgour et al. 2019) fits a multivariate Gaussian over a
+    *set* of embeddings, one per audio clip.  We therefore return one
+    embedding vector per __call__, but we do NOT average over time frames
+    inside the model — instead we use the clip-level embedding that
+    AudioTagging already exposes (the global average-pooled feature before
+    the classifier head), which is the standard choice in the community.
+    """
+
+    PANNS_SR = 32000  # CNN14 was trained at 32 kHz
+
+    def __init__(self, sr: int = 32000, device: str = "cuda",
+                 checkpoint: str = "/root/panns_data/Cnn14_mAP=0.431.pth"):
+        from panns_inference import AudioTagging
+        if not os.path.exists(checkpoint):
+            raise FileNotFoundError(f"PANNs checkpoint not found: {checkpoint}")
+        # Always run the model at its native 32 kHz
+        self.sr = self.PANNS_SR
+        self.device = device
+        self.wrapper = AudioTagging(checkpoint_path=checkpoint, device=device)
+        self.model = self.wrapper.model
+        self.model.eval()
+
+    def __call__(self, audio: np.ndarray) -> np.ndarray:
+        """
+        audio : 1-D float32 numpy array at self.sr (32 kHz).
+        returns: 1-D float32 numpy array, shape (embedding_dim,)
+        """
+        if audio.ndim != 1:
+            raise ValueError(f"Expected 1-D audio, got shape {audio.shape}")
+        # Minimum length guard
+        if len(audio) < 1024:
+            audio = np.pad(audio, (0, 1024 - len(audio)))
+
+        audio_t = torch.from_numpy(audio).float().unsqueeze(0).to(self.device)  # (1, T)
+        with torch.no_grad():
+            output = self.wrapper.inference(audio_t)
+
+        # AudioTagging.inference returns (clipwise_output, embedding)
+        if isinstance(output, (tuple, list)) and len(output) >= 2:
+            emb = output[1]          # embedding is the second element
+        elif isinstance(output, dict):
+            emb = output.get("embedding", output.get("clipwise_output"))
+        else:
+            emb = output
+
+        if torch.is_tensor(emb):
+            emb = emb.detach().cpu().numpy()
+        emb = np.asarray(emb, dtype=np.float32)
+        # Shape may be (1, D) or (D,)
+        if emb.ndim == 2:
+            emb = emb.mean(axis=0)
+        return emb.ravel()
+
+
+# ---------------------------------------------------------------------------
+# FAD computation — standard Fréchet Distance formula
+# ---------------------------------------------------------------------------
+
+def _fit_gaussian(embeddings: np.ndarray):
+    """Return (mu, sigma) for a set of embeddings (N, D)."""
+    mu = embeddings.mean(axis=0)
+    # rowvar=False: each row is an observation
+    sigma = np.cov(embeddings, rowvar=False)
+    if sigma.ndim == 0:                  # single feature edge-case
+        sigma = np.array([[float(sigma)]])
+    return mu, sigma
+
+
+def compute_fad(emb_gen: np.ndarray, emb_ref: np.ndarray) -> float:
+    """
+    Fréchet Audio Distance between two sets of clip-level embeddings.
+
+    emb_gen, emb_ref : (N, D) float32 arrays
+    """
+    if emb_gen.ndim == 1:
+        emb_gen = emb_gen[np.newaxis, :]
+    if emb_ref.ndim == 1:
+        emb_ref = emb_ref[np.newaxis, :]
+
+    # Duplicate single-sample sets so np.cov doesn't crash
+    if emb_gen.shape[0] == 1:
+        emb_gen = np.vstack([emb_gen, emb_gen])
+    if emb_ref.shape[0] == 1:
+        emb_ref = np.vstack([emb_ref, emb_ref])
+
+    mu1, sigma1 = _fit_gaussian(emb_gen)
+    mu2, sigma2 = _fit_gaussian(emb_ref)
+
+    diff = mu1 - mu2
+    # Matrix square root of sigma1 @ sigma2
+    covmean = sqrtm(sigma1 @ sigma2)
+    if np.iscomplexobj(covmean):
+        if np.abs(covmean.imag).max() > 1e-3:
+            raise RuntimeError("sqrtm produced large imaginary component")
+        covmean = covmean.real
+
+    fad = float(diff @ diff + np.trace(sigma1 + sigma2 - 2.0 * covmean))
     return fad
 
 
+# ---------------------------------------------------------------------------
+# Per-task FAD helper (used by batch_partial_gen_quality_with_fad.sh)
+# ---------------------------------------------------------------------------
+
+def compute_fad_for_pair_eval_style(
+    gen_audio_path: str,
+    ref_audio_paths: List[str],
+    embedder: PANNsEmbedder,
+) -> float:
+    """
+    Compute FAD between a single generated file and a list of reference files.
+
+    Note: with very few samples the Gaussian fit is unreliable; treat the
+    result as an approximate per-task score rather than a population metric.
+    """
+    sr = embedder.sr
+    gen_audio = _load_mono(gen_audio_path, sr)
+    emb_gen = embedder(gen_audio)[np.newaxis, :]          # (1, D)
+
+    ref_embs = []
+    for p in ref_audio_paths:
+        ref_embs.append(embedder(_load_mono(p, sr)))
+    if not ref_embs:
+        raise ValueError("No reference audio files provided")
+    emb_ref = np.stack(ref_embs, axis=0)                  # (N_ref, D)
+
+    return compute_fad(emb_gen, emb_ref)
+
+
+# ---------------------------------------------------------------------------
+# CLI entry point
+# ---------------------------------------------------------------------------
+
 def main():
-    parser = argparse.ArgumentParser(description="Compute FAD between generated mix and unknown audio files (eval_total_gen style)")
+    parser = argparse.ArgumentParser(
+        description="Compute FAD between a generated mix and reference audio files (PANNs CNN14)"
+    )
     parser.add_argument("--gen_mix_path", type=str, required=True)
-    parser.add_argument("--given_wav_path", type=str, required=False, help="可选，不用于FAD，只用于记录")
+    parser.add_argument("--given_wav_path", type=str, default=None,
+                        help="Optional, not used for FAD — recorded in output only")
     parser.add_argument("--unknown_audio_files", type=str, nargs="+", required=True)
-    parser.add_argument("--sample_rate", type=int, default=32000)
-    parser.add_argument("--panns_checkpoint", type=str, default="/root/panns_data/Cnn14_mAP=0.431.pth")
-    parser.add_argument("--device", type=str, default="cuda", help="设备，可以是 'cuda', 'cpu', 或 'cuda:N'")
+    parser.add_argument("--sample_rate", type=int, default=32000,
+                        help="Ignored — PANNs CNN14 always runs at 32 kHz")
+    parser.add_argument("--panns_checkpoint", type=str,
+                        default="/root/panns_data/Cnn14_mAP=0.431.pth")
+    parser.add_argument("--device", type=str, default="cuda")
     parser.add_argument("--output_json", type=str, default=None)
     args = parser.parse_args()
 
-    # 解析设备参数，支持 cuda:N 格式
-    device = args.device
-    if device.startswith("cuda:") and "," not in device:
-        # cuda:N 格式，直接使用
-        pass
-    elif device == "cuda":
-        # 检查可用的 CUDA 设备数量
-        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
-            device = f"cuda:0"  # 默认使用 cuda:0
-    # 其他情况保持不变 (cpu 或其他)
-
-    panns_sr = 32000
-    if args.sample_rate != panns_sr:
-        print(f"[WARN] 忽略 --sample_rate={args.sample_rate}，PANNs 评估固定使用 {panns_sr} Hz 以匹配权重", flush=True)
-    embedder = PANNsEmbedder(sr=panns_sr, device=device, checkpoint=args.panns_checkpoint)
+    embedder = PANNsEmbedder(device=args.device, checkpoint=args.panns_checkpoint)
     fad = compute_fad_for_pair_eval_style(
         gen_audio_path=args.gen_mix_path,
         ref_audio_paths=args.unknown_audio_files,
@@ -180,12 +200,10 @@ def main():
     }
     print(json.dumps(result, ensure_ascii=False, indent=2))
     if args.output_json:
-        os.makedirs(os.path.dirname(args.output_json), exist_ok=True)
+        os.makedirs(os.path.dirname(os.path.abspath(args.output_json)), exist_ok=True)
         with open(args.output_json, "w", encoding="utf-8") as f:
             json.dump(result, f, ensure_ascii=False, indent=2)
 
 
 if __name__ == "__main__":
     main()
-
-

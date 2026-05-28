@@ -156,7 +156,7 @@ class MGELDM_TrainingWrapper(pl.LightningModule):
         )
         
         # 设置门控模式
-        gated_mode = hasattr(self.diffusion, 'enable_crossatten') and self.diffusion.enable_crossatten
+        gated_mode = getattr(self.diffusion, "enable_attention_gating", True)
         self.attention_logger.set_gated_mode(gated_mode)
         print(f"[DEBUG] gated_mode={gated_mode}")
         
@@ -434,6 +434,19 @@ class MGELDM_TrainingWrapper(pl.LightningModule):
         if self.attention_logger is not None:
             self.attention_logger.new_epoch()
             print(f"[AttentionSinkLogger] Epoch {self.trainer.current_epoch} completed, data saved.")
+
+
+    def on_train_end(self):
+        if self.attention_logger is not None:
+            tag = f"final_step{int(self.global_step)}"
+            self.attention_logger.flush_pending(tag=tag)
+            print(f"[AttentionSinkLogger] Train end flush completed with tag={tag}.")
+
+    def on_exception(self, exception):
+        if self.attention_logger is not None:
+            tag = f"exception_step{int(self.global_step)}"
+            self.attention_logger.flush_pending(tag=tag)
+            print(f"[AttentionSinkLogger] Exception flush completed with tag={tag}.")
 
 
 class MGELDM_DemoCallback(pl.Callback):

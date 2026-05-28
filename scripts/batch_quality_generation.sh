@@ -1,6 +1,6 @@
 #!/bin/bash
 export PYTHONPATH=/app/data/code/MGE-LDM-main
-export http_proxy="http://10.242.13.204:7890"
+export http_proxy="http://10.242.26.231:7890"
 export https_proxy="$http_proxy"
 export HTTP_PROXY="$http_proxy"
 export HTTPS_PROXY="$https_proxy"
@@ -9,7 +9,7 @@ set -e
 
 GPU=1
 CONFIG_NAME="dit"
-CKPT_DIR="/app/data/code/test_code/MGE-LDM-main/ckps/test20260309/dit/checkpoints/"
+CKPT_DIR="/app/data/code/test_code/MGE-LDM-main/ckps/gate_quality_aux_loss_X_HiddenState/dit/checkpoints/"
 CKPT_PATH=$CKPT_DIR"unwrapped_DiT_31.ckpt"
 
 ## 推断条件
@@ -56,7 +56,7 @@ TEXT_PROMPTS=(
 
 
 # 使用预定义的质量分数数组，每隔1.0测试（0.0到9.0）
-QUALITY_SCORES=(0.2)
+QUALITY_SCORES=(0.8)
 
 for QUALITY_SCORE in "${QUALITY_SCORES[@]}"; do
     
@@ -88,7 +88,8 @@ for QUALITY_SCORE in "${QUALITY_SCORES[@]}"; do
             +cfg_scale=${CFG_SCALE} \
             +overlap_dur=${OVERLAP_DUR} \
             +repaint_n=${REPAINT_N} \
-            +output_dir=${OUTPUT_DIR}
+            +output_dir=${OUTPUT_DIR} \
+            +enable_attention_gating=true
         
         echo "完成: 质量分数 ${QUALITY_SCORE}, 提示 ${PROMPT_INDEX}"
         echo ""

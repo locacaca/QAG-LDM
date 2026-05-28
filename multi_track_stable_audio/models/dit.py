@@ -31,7 +31,8 @@ class DiffusionTransformer(nn.Module):
         transformer_type: tp.Literal["x-transformers", "continuous_transformer"] = "continuous_transformer",
         norm_type: tp.Literal["layernorm", "groupnorm"] = "groupnorm",
         use_t_emb_trackwise: bool = True,
-        enable_crossatten: bool = False,
+        enable_quality_control: bool = True,
+        enable_attention_gating: bool = True,
         num_quality_tokens: int = 1,
         quality_token_dim: int = 512,
         quality_mask_prob: float = 0.15,
@@ -48,6 +49,8 @@ class DiffusionTransformer(nn.Module):
         self.io_channels = io_channels
         self.use_t_emb_trackwise = use_t_emb_trackwise
         self.quality_mask_prob = quality_mask_prob
+        self.enable_quality_control = enable_quality_control
+        self.enable_attention_gating = enable_attention_gating
 
         dim_in = num_tracks * io_channels + input_concat_dim
         dim_out = num_tracks * io_channels
@@ -139,14 +142,13 @@ class DiffusionTransformer(nn.Module):
             norm_type=norm_type,
             global_cond_group=num_tracks if global_cond_grouped else 1,
             norm_kwargs=norm_kwargs,
-            use_crossatten=enable_crossatten,
+            use_crossatten=enable_attention_gating,
             dim_quality=quality_token_dim,
             num_quality_tokens=num_quality_tokens,
             **kwargs,
         )
 
-        self.enable_crossatten = enable_crossatten
-        if enable_crossatten:
+        if enable_quality_control:
             self.quality_token_generator = QualityTokenGenerator(
                 quality_dim=1,
                 num_tokens=num_quality_tokens,
@@ -161,6 +163,11 @@ class DiffusionTransformer(nn.Module):
                 nn.LayerNorm(embed_dim_mult),
                 nn.Linear(embed_dim_mult, 1),
             )
+        else:
+            self.quality_token_generator = None
+            self.quality_null_token = None
+            self.quality_mask_token = None
+            self.quality_score_predictor = None
 
         self.preprocess_conv = nn.Conv1d(dim_in, dim_in, 1, bias=False)
         nn.init.zeros_(self.preprocess_conv.weight)
@@ -189,9 +196,7 @@ class DiffusionTransformer(nn.Module):
             if self.to_cross_cond_embed is not None:
                 cross_attn_cond = self.to_cross_cond_embed(cross_attn_cond)
             else:
-                raise ValueError(
-                    "Cross-attention conditioning is not enabled. Set enable_crossatten=True in MGELDM config."
-                )
+                raise ValueError("Cross-attention conditioning is not active in the current MGELDM setup.")
 
         if exists(global_embed):
             global_embed = self.to_global_embed(global_embed)
@@ -201,7 +206,7 @@ class DiffusionTransformer(nn.Module):
         quality_tokens = None
         quality_prepend = None
         quality_mask = None
-        if self.enable_crossatten:
+        if self.enable_quality_control:
             null_quality_prepend = self.quality_null_token.to(
                 dtype=x.dtype,
                 device=x.device,
@@ -296,7 +301,13 @@ class DiffusionTransformer(nn.Module):
             output, final_hidden = output
 
         quality_aux = None
-        if return_quality_aux and quality_prepend is not None and quality_score_targets is not None and final_hidden is not None:
+        if (
+            self.enable_quality_control
+            and return_quality_aux
+            and quality_prepend is not None
+            and quality_score_targets is not None
+            and final_hidden is not None
+        ):
             quality_token_start = 1  # prepend order: timestep -> quality -> audio
             quality_token_end = quality_token_start + quality_prepend.shape[1]
             quality_hidden = final_hidden[:, quality_token_start:quality_token_end, :].mean(dim=1)
@@ -350,7 +361,7 @@ class DiffusionTransformer(nn.Module):
         if cross_attn_cond is not None and self.to_cross_cond_embed is None:
             raise ValueError(
                 f"Cross-attention conditioning is not enabled but got cross_attn_cond with shape {cross_attn_cond.shape}. "
-                "Set enable_crossatten=True in MGELDM config."
+                "The current MGELDM path does not use cross-attention conditioning."
             )
 
         assert negative_cross_attn_cond is None
@@ -383,7 +394,7 @@ class DiffusionTransformer(nn.Module):
                 ).to(torch.bool)
                 cross_attn_cond = torch.where(dropout_mask, null_cross_attn_cond, cross_attn_cond)
 
-            if exists(quality_scores) and self.enable_crossatten and not return_quality_aux:
+            if self.enable_quality_control and exists(quality_scores) and not return_quality_aux:
                 dropout_mask = torch.bernoulli(
                     torch.full(quality_scores.shape, cfg_dropout_prob, device=quality_scores.device)
                 ).to(torch.bool)
@@ -431,29 +442,28 @@ class DiffusionTransformer(nn.Module):
 
             batch_quality_scores = None
             batch_quality_null_mask = None
-            if self.enable_crossatten:
-                if quality_scores is not None:
-                    batch_quality_scores = torch.cat([quality_scores, quality_scores], dim=0)
-                    unconditional_null_mask = torch.cat(
-                        [
-                            torch.zeros_like(quality_scores, dtype=torch.bool),
-                            torch.ones_like(quality_scores, dtype=torch.bool),
-                        ],
+            if self.enable_quality_control and quality_scores is not None:
+                batch_quality_scores = torch.cat([quality_scores, quality_scores], dim=0)
+                unconditional_null_mask = torch.cat(
+                    [
+                        torch.zeros_like(quality_scores, dtype=torch.bool),
+                        torch.ones_like(quality_scores, dtype=torch.bool),
+                    ],
+                    dim=0,
+                )
+                if train_quality_null_mask is not None:
+                    batch_quality_null_mask = torch.cat(
+                        [train_quality_null_mask, unconditional_null_mask],
                         dim=0,
                     )
-                    if train_quality_null_mask is not None:
-                        batch_quality_null_mask = torch.cat(
-                            [train_quality_null_mask, unconditional_null_mask],
-                            dim=0,
-                        )
-                    else:
-                        batch_quality_null_mask = unconditional_null_mask
                 else:
-                    batch_quality_null_mask = torch.ones(
-                        batch_inputs.shape[0],
-                        device=batch_inputs.device,
-                        dtype=torch.bool,
-                    )
+                    batch_quality_null_mask = unconditional_null_mask
+            elif self.enable_quality_control:
+                batch_quality_null_mask = torch.ones(
+                    batch_inputs.shape[0],
+                    device=batch_inputs.device,
+                    dtype=torch.bool,
+                )
 
             batch_output = self._forward(
                 batch_inputs,

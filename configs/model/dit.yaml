@@ -70,7 +70,8 @@ MGELDM:
   norm_type: "groupnorm" # or layernorm
   use_t_emb_trackwise: true
   diffusion_objective: "v"
-  enable_crossatten: true
+  enable_quality_control: ${...trainer.enable_quality_control}
+  enable_attention_gating: ${...trainer.enable_attention_gating}
   num_quality_tokens: 1
   quality_token_dim: 512
   quality_mask_prob: 0.15

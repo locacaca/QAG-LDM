@@ -53,13 +53,30 @@ def unwrap_model(config):
         from multi_track_stable_audio.training.pipeline_diffusion import MGELDM_TrainingWrapper
         model = create_mgeldm_from_config(config.model).to(device)
         use_ema = trainer_config.get("use_ema", True)
-        training_wrapper = MGELDM_TrainingWrapper.load_from_checkpoint(
-            config.ckpt_path,
-            model=model,
-            use_ema=use_ema,
-            optimizer_configs=trainer_config.get("optimizer_configs", None),
-            strict=True
-        ).to(device)
+        try:
+            training_wrapper = MGELDM_TrainingWrapper.load_from_checkpoint(
+                config.ckpt_path,
+                model=model,
+                use_ema=use_ema,
+                optimizer_configs=trainer_config.get("optimizer_configs", None),
+                strict=True
+            ).to(device)
+        except RuntimeError as exc:
+            model_has_gate = any("self_attn.gate_proj" in key for key in model.state_dict().keys())
+            ckpt = torch.load(config.ckpt_path, map_location="cpu")
+            state_dict = ckpt.get("state_dict", {})
+            ckpt_has_gate = any("self_attn.gate_proj" in key for key in state_dict.keys())
+
+            if ckpt_has_gate and not model_has_gate:
+                raise RuntimeError(
+                    "Checkpoint/model architecture mismatch while unwrapping MGELDM: "
+                    "the checkpoint contains self-attention gate parameters "
+                    "(`self_attn.gate_proj.*`), but the current config instantiated a non-gated model. "
+                    f"Current trainer.enable_attention_gating={trainer_config.get('enable_attention_gating', None)}. "
+                    "Use a gated trainer config for unwrap, for example `trainer=dit`, "
+                    "or override `trainer.enable_attention_gating=true`."
+                ) from exc
+            raise
     else:
         raise ValueError(f"Unknown model type {config.type}")
 

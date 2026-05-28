@@ -34,7 +34,7 @@ def parse_args():
         "--vmax",
         type=float,
         default=None,
-        help="Optional upper bound of the color scale. Defaults to max(attn_map) + 0.01.",
+        help="Optional upper bound of the color scale. Defaults to 1.0.",
     )
     parser.add_argument(
         "--quality-tokens",
@@ -114,12 +114,30 @@ def normalize_attn_map(attn_tensor: torch.Tensor) -> np.ndarray:
     )
 
 
-def plot_heatmap(attn_map: np.ndarray, title: str, save_path: Path, dpi: int, vmax: float) -> None:
+def plot_heatmap(
+    attn_map: np.ndarray,
+    title: str,
+    save_path: Path,
+    dpi: int,
+    vmax: float,
+    first_token_score: float,
+) -> None:
     fig, ax = plt.subplots(figsize=(8, 6))
     im = ax.imshow(attn_map, aspect="auto", cmap="viridis", origin="lower", vmin=0.0, vmax=vmax)
     ax.set_title(title)
     ax.set_xlabel("key")
     ax.set_ylabel("query")
+    ax.text(
+        0.5,
+        0.985,
+        f"timestep token score: {first_token_score:.4f}",
+        transform=ax.transAxes,
+        ha="center",
+        va="top",
+        color="white",
+        fontsize=11,
+        bbox={"facecolor": "black", "alpha": 0.45, "pad": 3, "edgecolor": "none"},
+    )
     fig.colorbar(im, ax=ax, pad=0.015)
     fig.tight_layout()
     fig.savefig(save_path, dpi=dpi, bbox_inches="tight")
@@ -309,7 +327,8 @@ def main():
             layer_dir = outdir / f"layer_{layer:02d}_{branch}_step_{step}"
             layer_dir.mkdir(parents=True, exist_ok=True)
 
-            vmax = args.vmax if args.vmax is not None else float(attn_map.max()) + 0.001
+            vmax = args.vmax if args.vmax is not None else 1.0
+            first_token_score = float(attn_map[:, 0].mean())
             heatmap_path = layer_dir / f"layer_{layer:02d}_{branch}_heatmap.png"
             plot_heatmap(
                 attn_map,
@@ -317,6 +336,7 @@ def main():
                 save_path=heatmap_path,
                 dpi=args.dpi,
                 vmax=vmax,
+                first_token_score=first_token_score,
             )
 
         print(f"Saved heatmaps to: {outdir}")

@@ -35,6 +35,8 @@ cfg_dropout_prob: 0.4
 timestep_sampler: "uniform"
 timestep_dropout_prob: 0.75
 timestep_eps: 0.02
+enable_quality_control: true
+enable_attention_gating: true
 quality_aux_loss_weight: 0.1
 mask_loss_track: null ## specified when mix-only pre-training
 

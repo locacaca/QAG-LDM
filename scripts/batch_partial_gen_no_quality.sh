@@ -117,19 +117,15 @@ while IFS= read -r line; do
     # 为当前任务创建输出目录
     TASK_OUTPUT_DIR="${MAIN_OUTPUT_DIR}/${TRACK_UID}"
     
-    # 检查任务是否已经完成
-    if [ -d "${TASK_OUTPUT_DIR}" ]; then
-        # 检查是否已有生成结果
-        if [ -f "${TASK_OUTPUT_DIR}/output_0001/gen_mix.wav" ] || [ -f "${TASK_OUTPUT_DIR}/output_0002/gen_mix.wav" ] || [ -f "${TASK_OUTPUT_DIR}/output_0003/gen_mix.wav" ]; then
-            echo "跳过任务 ${TASK_INDEX}/${TASK_COUNT}: ${TRACK_UID} (已完成)"
-            echo "  未知音轨: ${UNKNOWN_INSTRUMENT}"
-            echo "  扩展提示: ${TEXT_PROMPT}"
-            echo "  输出目录: ${TASK_OUTPUT_DIR}"
-            echo "  ✓ 任务已完成，跳过"
-            echo ""
-            SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
-            continue
-        fi
+    # 检查任务是否已经完成（infer_no_quality.py 直接输出到任务目录，无子目录）
+    if [ -f "${TASK_OUTPUT_DIR}/gen_src.wav" ] || [ -f "${TASK_OUTPUT_DIR}/gen_mix.wav" ]; then
+        echo "跳过任务 ${TASK_INDEX}/${TASK_COUNT}: ${TRACK_UID} (已完成)"
+        echo "  未知音轨: ${UNKNOWN_INSTRUMENT}"
+        echo "  扩展提示: ${TEXT_PROMPT}"
+        echo "  输出目录: ${TASK_OUTPUT_DIR}"
+        echo ""
+        SKIPPED_COUNT=$((SKIPPED_COUNT + 1))
+        continue
     fi
     
     # 创建输出目录
